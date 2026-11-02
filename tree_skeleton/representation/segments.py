@@ -1,0 +1,223 @@
+from pathlib import Path
+import numpy as np
+import torch
+from einops import rearrange
+from torch import Tensor
+from torch.nn import functional as F
+from torch.nn.utils.rnn import pad_sequence
+from beartype import beartype
+from beartype.typing import Tuple
+from math import ceil
+from einops import rearrange, repeat, reduce, einsum
+
+from tree_skeleton._tensor_ops import l1norm
+
+
+def load_model(model, load_path, device="cpu"):
+    model_ckpt = torch.load(load_path, map_location=device, weights_only=False)
+    model_state_dict = model_ckpt["ema_model"]
+    # Create a new state dictionary, removing the 'model.' prefix
+    new_model_state_dict = {}
+    for key, value in model_state_dict.items():
+        if key.startswith("online_model."):
+            new_key = key.replace("online_model.", "")
+            new_model_state_dict[new_key] = value
+
+    from tree_skeleton.nn.checkpoint_keys import tokenizer_state
+
+    model.load_state_dict(tokenizer_state(new_model_state_dict), strict=True)
+    # print(device)
+    print(f"Tokenizer loaded from {load_path}")
+
+    return model
+
+
+def segment_coords_to_skeleton(segment_coords):
+    # Rearrange line coordinates to form vertices
+    vertices = rearrange(segment_coords, "nl nlv c -> (nl nlv) c")
+    lines = [[i, i + 1] for i in range(0, vertices.size(0), 2)]
+
+    return dict(vertices=vertices, lines=lines)
+
+
+@torch.no_grad()
+def derive_positive_direction(vectors, eps=1e-8):
+    mask_1 = vectors[:, :, 0] < -eps
+    vectors[mask_1] *= -1
+
+    mask_2 = (vectors[:, :, 0].abs() < eps) & (vectors[:, :, 1] < -eps)
+    vectors[mask_2] *= -1
+
+    mask_3 = (
+        (vectors[:, :, 0].abs() < eps) & (vectors[:, :, 1].abs() < eps) & (vectors[:, :, 2] < -eps)
+    )
+    vectors[mask_3] *= -1
+
+    return vectors
+
+
+@torch.no_grad()
+def get_derived_segment_features(
+    segment_coords: Tensor,  # 2 vertices per segment, 3 coordinates per vertex
+):
+    vectors = segment_coords[:, :, 1, :] - segment_coords[:, :, 0, :]
+    midps = (segment_coords[:, :, 1, :] + segment_coords[:, :, 0, :]) / 2
+    length = vectors.norm(dim=-1, keepdim=True)
+    vectors_norm = vectors / (length + 1e-8)
+    directions = derive_positive_direction(vectors_norm)
+
+    return dict(
+        length=length,
+        directions=directions,
+        midps=midps,
+    )
+
+
+@torch.no_grad()
+def get_derived_segment_edge_features(
+    segment_edge_coords: Tensor,  # 2 segments per segment_edge, 2 vertices per segment, 3 coordinates per vertice
+    segment_edge_mask: Tensor,
+):
+    segment_edge_vertex_0 = segment_edge_coords[:, :, :, 0, :]
+    segment_edge_vertex_1 = segment_edge_coords[:, :, :, 1, :]
+
+    segment_vectors = segment_edge_vertex_0 - segment_edge_vertex_1
+
+    segment_edge_segment_norm = segment_vectors.norm(dim=-1)
+
+    dot_product_all = einsum(
+        segment_vectors[:, :, 0, :], segment_vectors[:, :, 1, :], "i j k, i j k->i j"
+    )
+
+    angle_radians = torch.acos(
+        dot_product_all
+        / (segment_edge_segment_norm[:, :, 0] * segment_edge_segment_norm[:, :, 1] + 1e-8)
+    )
+
+    angle_radians = torch.where(
+        angle_radians > torch.pi / 2, torch.pi - angle_radians, angle_radians
+    )
+
+    angle_radians = angle_radians.masked_fill(~segment_edge_mask, float(0.0))
+
+    return angle_radians
+
+
+@beartype
+def discretize(
+    t: Tensor, *, continuous_range: Tuple[float, float], num_discrete: int = 128
+) -> Tensor:
+    lo, hi = continuous_range
+    assert hi > lo
+
+    t = (t - lo) / (hi - lo)
+    t *= num_discrete
+    t -= 0.5
+
+    return t.round().long().clamp(min=0, max=num_discrete - 1)
+
+
+@beartype
+def undiscretize(
+    t: Tensor, *, continuous_range=Tuple[float, float], num_discrete: int = 128
+) -> Tensor:
+    lo, hi = continuous_range
+    assert hi > lo
+
+    t = t.float()
+
+    t += 0.5
+    t /= num_discrete
+    return t * (hi - lo) + lo
+
+
+@beartype
+def gaussian_blur_1d(t: Tensor, *, sigma: float = 1.0) -> Tensor:
+
+    _, _, channels, device, dtype = *t.shape, t.device, t.dtype
+
+    width = int(ceil(sigma * 5))
+    width += (width + 1) % 2
+    half_width = width // 2
+
+    distance = torch.arange(-half_width, half_width + 1, dtype=dtype, device=device)
+
+    gaussian = torch.exp(-(distance**2) / (2 * sigma**2))
+    gaussian = l1norm(gaussian)
+
+    kernel = repeat(gaussian, "n -> c 1 n", c=channels)
+
+    t = rearrange(t, "b n c -> b c n")
+    out = F.conv1d(t, kernel, padding=half_width, groups=channels)
+    return rearrange(out, "b c n -> b n c")
+
+
+@beartype
+def scatter_mean(tgt: Tensor, indices: Tensor, src=Tensor, *, dim: int = -1, eps: float = 1e-5):
+    num = tgt.scatter_add(dim, indices, src)
+    den = torch.zeros_like(tgt).scatter_add(dim, indices, torch.ones_like(src))
+    return num / den.clamp(min=eps)
+
+
+@torch.no_grad()
+def derive_segment_edges_from_segments(
+    segments: Tensor,
+    pad_id=-1,
+    neighbor_if_share_one_vertex=True,
+    include_self=True,
+) -> Tensor:
+
+    is_one_segment, device = segments.ndim == 2, segments.device
+
+    if is_one_segment:
+        # add batch dimension
+        segments = rearrange(segments, "nl c -> 1 nl c")
+
+    max_num_segments = segments.shape[1]
+    segment_edges_vertices_threshold = 1 if neighbor_if_share_one_vertex else 2
+
+    all_edges = torch.stack(
+        torch.meshgrid(
+            torch.arange(max_num_segments, device=device),
+            torch.arange(max_num_segments, device=device),
+            indexing="ij",
+        ),
+        dim=-1,
+    )
+
+    segment_masks = reduce(segments != pad_id, "b nl c -> b nl", "all")
+    segment_edges_masks = rearrange(segment_masks, "b i -> b i 1") & rearrange(
+        segment_masks, "b j -> b 1 j"
+    )
+
+    segment_edges = []
+
+    for segment, segment_edge_mask in zip(segments, segment_edges_masks):
+        shared_vertices = rearrange(segment, "i c -> i 1 c 1") == rearrange(
+            segment, "j c -> 1 j 1 c"
+        )
+        num_shared_vertices = shared_vertices.any(dim=-1).sum(dim=-1)
+        is_neighbor_segment = (
+            num_shared_vertices == segment_edges_vertices_threshold
+        ) & segment_edge_mask
+
+        if not include_self:
+            is_neighbor_segment &= num_shared_vertices != 2
+
+        segment_edge = all_edges[is_neighbor_segment]
+        segment_edge = torch.sort(segment_edge, dim=1).values
+
+        # Use unique to find the unique rows in the sorted tensor
+        # Since the pairs are sorted, [1, 0] and [0, 1] will both appear as [0, 1] and be considered the same
+        segment_edge, _ = torch.unique(segment_edge, sorted=True, return_inverse=True, dim=0)
+
+        segment_edges.append(segment_edge)
+
+    segment_edges = pad_sequence(segment_edges, padding_value=pad_id, batch_first=True)
+
+    if is_one_segment:
+        segment_edges = rearrange(segment_edges, "1 e ij -> e ij")
+
+    # get segment_edge features
+
+    return segment_edges

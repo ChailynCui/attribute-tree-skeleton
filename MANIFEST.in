@@ -1,0 +1,14 @@
+include .gitignore README.md
+include scripts/blender_generate_species_dataset.py
+include scripts/white_birch_3000_manifest.csv
+recursive-include configs *.yaml
+recursive-include assets *.png
+prune docs
+prune .local
+prune tests
+prune provenance
+prune .git
+prune .pytest_cache
+prune checkpoints
+prune external_data
+global-exclude *.py[cod]

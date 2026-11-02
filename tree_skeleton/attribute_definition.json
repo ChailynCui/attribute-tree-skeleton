@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "definition_version": "robust_geometry_v2.2_grid_selected",
+  "selected_candidate_id": "base_q2p5__top_q99p5__span_q02_q98",
+  "height": {
+    "metric": "q98(z) - min(z)",
+    "top_quantile": 0.98
+  },
+  "crown_width": {
+    "metric": "mean robust PCA span",
+    "crown_base_quantile": 0.025,
+    "crown_top_quantile": 0.995,
+    "span_low_quantile": 0.02,
+    "span_high_quantile": 0.98
+  },
+  "branch_density": {
+    "metric": "crown skeleton length / robust crown box volume",
+    "crown_base_quantile": 0.025,
+    "crown_top_quantile": 0.995,
+    "span_low_quantile": 0.02,
+    "span_high_quantile": 0.98
+  },
+  "topology_diagnostics": [
+    "fork_density",
+    "forks_per_skeleton_length"
+  ],
+  "weld_tolerance": 1e-06
+}

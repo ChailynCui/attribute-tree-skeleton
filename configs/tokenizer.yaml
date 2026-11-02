@@ -1,0 +1,67 @@
+format: tree_skeleton_experiment_v1
+name: shared-tokenizer
+stage: tokenizer
+seed: 20260805
+data:
+  root: external_data
+  geometry: four_species_12000_species_global_strict.pkl
+  attributes: four_species_12000_attributes_v2p2.json
+  split: four_species_12000_split_seed20260805.json
+  species:
+  - callistemon
+  - japanese_maple
+  - weeping_willow
+  - white_birch
+  attribute_names:
+  - height
+  - crown_width
+  - branch_density
+  augmentation: xy_dihedral
+  condition_mode: correct
+  value_key: percentile
+  coordinate_scale_fit: train
+  coordinate_protocol: coordinate_protocol.json
+tokenizer:
+  num_discrete_coors: 1024
+  encoder_dims_through_depth:
+  - 64
+  - 128
+  - 256
+  - 256
+  - 384
+  decoder_dims_through_depth:
+  - 128
+  - 128
+  - 128
+  - 128
+  - 192
+  - 192
+  - 192
+  - 192
+  - 256
+  - 256
+  - 256
+  - 256
+  - 256
+  - 256
+  - 384
+  - 384
+  - 384
+  codebook_size: 8192
+  attn_encoder_depth: 4
+  attn_decoder_depth: 8
+optimization:
+  schedule_updates: 115200
+  stop_updates: 115200
+  learning_rate: 0.0001
+  weight_decay: 0.001
+  gradient_clip: 1.0
+  validate_every: 4800
+  checkpoint_every: 9600
+  log_every: 5
+runtime:
+  processes: 2
+  batch_size: 4
+  accumulation: 2
+  workers: 4
+  precision: bf16

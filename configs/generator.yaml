@@ -1,0 +1,82 @@
+format: tree_skeleton_experiment_v1
+name: main
+stage: generator
+seed: 1351053704
+data:
+  root: external_data
+  geometry: four_species_12000_species_global_strict.pkl
+  attributes: four_species_12000_attributes_v2p2.json
+  split: four_species_12000_split_seed20260805.json
+  species:
+  - callistemon
+  - japanese_maple
+  - weeping_willow
+  - white_birch
+  attribute_names:
+  - height
+  - crown_width
+  - branch_density
+  augmentation: xy_dihedral
+  condition_mode: correct
+  value_key: percentile
+  coordinate_scale_fit: train
+  coordinate_protocol: coordinate_protocol.json
+tokenizer:
+  num_discrete_coors: 1024
+  encoder_dims_through_depth:
+  - 64
+  - 128
+  - 256
+  - 256
+  - 384
+  decoder_dims_through_depth:
+  - 128
+  - 128
+  - 128
+  - 128
+  - 192
+  - 192
+  - 192
+  - 192
+  - 256
+  - 256
+  - 256
+  - 256
+  - 256
+  - 256
+  - 384
+  - 384
+  - 384
+  codebook_size: 8192
+  attn_encoder_depth: 4
+  attn_decoder_depth: 8
+generator:
+  dim: 512
+  attn_depth: 12
+  attn_heads: 16
+  max_seq_len: 29968
+  coarse_pre_gateloop_depth: 2
+  fine_pre_gateloop_depth: 2
+  dropout: 0.1
+  num_species: 4
+  attribute_input_type: continuous
+  num_attribute_fourier_features: 8
+  attribute_conditioning: prefix_film
+  attribute_film_pooling: flatten_project
+  isolate_condition_init_rng: true
+  num_attributes: 3
+optimization:
+  schedule_updates: 216000
+  stop_updates: 216000
+  learning_rate: 0.0002
+  weight_decay: 0.01
+  gradient_clip: 0.5
+  validate_every: 2400
+  checkpoint_every: 12000
+  log_every: 10
+runtime:
+  processes: 2
+  batch_size: 2
+  accumulation: 2
+  workers: 4
+  precision: fp16

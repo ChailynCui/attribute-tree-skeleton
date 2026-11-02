@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attribute-tree-skeleton"
+version = "0.1.1"
+description = "Attribute-conditioned explicit 3D tree skeleton generation and matched evaluation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+  "numpy>=2,<3", "scipy>=1.11", "PyYAML>=6",
+  "torch>=2.6,<2.12", "torch-geometric==2.6.1",
+  "x-transformers==1.40.2", "vector-quantize-pytorch==1.23.2",
+  "gateloop-transformer==0.2.5", "local-attention==1.11.2",
+  "einops>=0.8.1,<0.9", "einx>=0.3,<0.4", "accelerate>=1.10,<2",
+  "ema-pytorch==0.7.7", "pytorch-custom-utils==0.0.21",
+  "beartype>=0.21,<0.22", "torchtyping==0.1.5", "tqdm>=4.67"
+]
+
+[project.scripts]
+tree-skeleton = "tree_skeleton.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["tree_skeleton*"]
+
+[tool.setuptools.package-data]
+tree_skeleton = ["attribute_definition.json", "evaluation_seeds.json"]
